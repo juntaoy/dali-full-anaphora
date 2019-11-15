@@ -1,0 +1,8 @@
+tensorflow-gpu==1.8
+tensorflow-hub
+scikit-learn
+pyhocon
+numpy
+scipy
+h5py
+tqdm
