@@ -16,13 +16,11 @@ if __name__ == "__main__":
   config['lm_path'] = config['test_lm_path']
   config["out_dir"] = util.mkdirs(os.path.join(config["log_dir"],'test_out'))
 
+  model = cm.CorefModel(config)
   session_config = tf.ConfigProto()
   session_config.gpu_options.allow_growth = True
   session_config.allow_soft_placement = True
 
-  model = cm.CorefModel(config)
   with tf.Session(config=session_config) as session:
     model.restore(session)
-    global_step = session.run(model.global_step)
-    print(global_step)
     model.evaluate(session, official_stdout=True)

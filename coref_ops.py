@@ -18,8 +18,3 @@ tf.NotDifferentiable("DistanceBins")
 cluster_width_bins = coref_op_library.cluster_width_bins
 tf.NotDifferentiable("ClusterWidthBins")
 
-extract_antecedent_labels = coref_op_library.extract_antecedent_labels
-tf.NotDifferentiable("ExtractAntecedentLabels")
-
-oracle_clusters = coref_op_library.oracle_clusters
-tf.NotDifferentiable("OracleClusters")

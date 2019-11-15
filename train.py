@@ -15,10 +15,9 @@ if __name__ == "__main__":
 
   report_frequency = config["report_frequency"]
   eval_frequency = config["eval_frequency"]
-  #evaluate unlimited cluster only used in the final evaluation
-  config["eval_unlimited_cluster"] = False
+
   model = cm.CorefModel(config)
-  saver = tf.train.Saver(max_to_keep=1)
+  saver = tf.train.Saver()
 
   log_dir = config["log_dir"]
   writer = tf.summary.FileWriter(log_dir, flush_secs=20)
@@ -43,10 +42,7 @@ if __name__ == "__main__":
       saver.restore(session, ckpt.model_checkpoint_path)
 
     initial_time = time.time()
-
-    tf_global_step = 0
-
-    while tf_global_step < max_step:
+    while True:
       tf_loss, tf_global_step, _ = session.run([model.loss, model.global_step, model.train_op])
       accumulated_loss += tf_loss
 
@@ -72,4 +68,5 @@ if __name__ == "__main__":
         writer.add_summary(util.make_summary({"max_eval_f1": max_f1}), tf_global_step)
 
         print("[{}] evaL_f1={:.2f}, max_f1={:.2f} from step {}".format(tf_global_step, eval_f1, max_f1,max_point))
-
+      if max_step > 0 and tf_global_step >= max_step:
+        break

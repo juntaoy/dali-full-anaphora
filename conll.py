@@ -89,7 +89,6 @@ def official_conll_eval(gold_path, predicted_path, metric, official_stdout=False
   if official_stdout:
     print("Official result for {}".format(metric))
     print(stdout)
-    print('%.2f %.2f %.2f' % (precision,recall,f1))
 
   return { "r": recall, "p": precision, "f": f1 }
 
