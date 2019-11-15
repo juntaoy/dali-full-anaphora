@@ -18,7 +18,7 @@ In *Proceedings of the 2019 Annual Conference of the North American Chapter of t
 * After that run `setup.sh` to download the GloVe embeddings that required by the system and compile the Tensorflow custom kernels.
 
 ## To use a pre-trained model
-* Pre-trained models can be download from [this link](https://www.dropbox.com/s/bohtoj1a01qtgk2/best_models.zip?dl=0). We provide three pre-trained models:
+* Pre-trained models can be download from [this link](https://www.dropbox.com/s/vxr57e2u2q7s8nf/best_models_lrec2020.zip?dl=0). We provide three pre-trained models:
    * One (best_crac) for CRAC style full anaphora resolution, the model predicts, in addition, the single mentions and the non-referring expressions. 
    * The second model (best_conll) for CoNLL style coreference resolution that only predicts non-singleton clusters.
    * In additional, the third model (best_pd) is trained on the same [Phrase-Detectives-Corpus-2.1.4](https://github.com/dali-ambiguity/Phrase-Detectives-Corpus-2.1.4) as in our NAACL paper, our latest system has a better scores when compared with our results in the NAACL paper, so we would encourage people to use this model when possible. The model has average CoNLL scores of 75.7% (singletons included) and 66.8% (singletons excluded) and a F1 of 56.7% on detecting non-referring expressions.
