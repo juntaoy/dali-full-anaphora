@@ -6,7 +6,7 @@ This repository contains code introduced in the following paper:
 Juntao Yu, Alexandra Uma and Massimo Poesio  
 In *Proceedings of* ...
 
-A early version of the code also can be used to replicate the results in the following paper:
+An [early version](https://github.com/juntaoy/dali-full-anaphora/tree/naacl2019) of the code also can be used to replicate the results in the following paper:
 
 **[A Crowdsourced Corpus of Multiple Judgments and Disagreement on Anaphoric Interpretation](https://www.google.com/url?q=https%3A%2F%2Faclweb.org%2Fanthology%2Fpapers%2FN%2FN19%2FN19-1176%2F&sa=D&sntz=1&usg=AFQjCNEGeV2V4tsqBI2u4WviKKyxmvm9PQ)**  
 Massimo Poesio, Jon Chamberlain, Silviu Paun, Juntao Yu, Alexandra Uma and Udo Kruschwitz  
