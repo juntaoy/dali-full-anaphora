@@ -8,7 +8,7 @@ In *Proceedings of* ...
 
 A early version of the code also can be used to replicate the results in the following paper:
 
-**A Crowdsourced Corpus of Multiple Judgments and Disagreement on Anaphoric Interpretation**  
+**[A Crowdsourced Corpus of Multiple Judgments and Disagreement on Anaphoric Interpretation](https://www.google.com/url?q=https%3A%2F%2Faclweb.org%2Fanthology%2Fpapers%2FN%2FN19%2FN19-1176%2F&sa=D&sntz=1&usg=AFQjCNEGeV2V4tsqBI2u4WviKKyxmvm9PQ)**  
 Massimo Poesio, Jon Chamberlain, Silviu Paun, Juntao Yu, Alexandra Uma and Udo Kruschwitz  
 In *Proceedings of the 2019 Annual Conference of the North American Chapter of the Association for Computational Linguistics (NAACL)*, 2019
 
@@ -21,7 +21,7 @@ In *Proceedings of the 2019 Annual Conference of the North American Chapter of t
 * Pre-trained models can be download from [this link](https://www.dropbox.com/s/bohtoj1a01qtgk2/best_models.zip?dl=0). We provide three pre-trained models:
    * One (best_crac) for CRAC style full anaphora resolution, the model predicts, in addition, the single mentions and the non-referring expressions. 
    * The second model (best_conll) for CoNLL style coreference resolution that only predicts non-singleton clusters.
-   * In additional, the third model (best_pd) is trained on the [Phrase-Detectives-Corpus-2.1.4](https://github.com/dali-ambiguity/Phrase-Detectives-Corpus-2.1.4), our latest system has a better scores when compared with our NAACL paper. The model has average CoNLL scores of 75.7% (singletons included) and 66.8% (singletons excluded) and a F1 of 56.7% on detecting non-referring expressions.
+   * In additional, the third model (best_pd) is trained on the same [Phrase-Detectives-Corpus-2.1.4](https://github.com/dali-ambiguity/Phrase-Detectives-Corpus-2.1.4) as in our NAACL paper, our latest system has a better scores when compared with our results in the NAACL paper, so we would encourage people to use this model when possible. The model has average CoNLL scores of 75.7% (singletons included) and 66.8% (singletons excluded) and a F1 of 56.7% on detecting non-referring expressions.
    * In the folder you will also find a file called *char_vocab.english.txt* which is the vocabulary file for character-based embeddings used by our pre-trained models.
 * Put the downloaded models along with the *char_vocab.english.txt* in the root folder of the code.
 * Modifiy the *test_path* and *conll_test_path* accordingly:
@@ -43,12 +43,12 @@ In *Proceedings of the 2019 Annual Conference of the North American Chapter of t
       * For CoNLL please see the [CoNLL 2012 shared task page](http://conll.cemantix.org/2012/introduction.html) for more detail
       * The CARC 2018 shared task pape can be found [here](http://dali.eecs.qmul.ac.uk/crac18_shared_task)
       * Both CoNLL scorer and the CRAC are included in this repository and is ready to use with our code. Please note we slightly modified the CRAC scorer to interact with our code, the original scorer can be found [here](https://github.com/ns-moosavi/coval)
-* Then you need to run the `extract_bert_features.sh` to conpute the BERT embeddings for the test set.
+* Then you need to run the `extract_bert_features.sh` to compute the BERT embeddings for the test set.
 * Then use `python evaluate.py config_name` to start your evaluation.
 
 ## To train your own model
 * To train your own model you need first create the character vocabulary by using `python get_char_vocab.py train.jsonlines dev.jsonlines`
-* Then you need to run the `extract_bert_features.sh` to conpute the BERT embeddings for both training and development sets.
+* Then you need to run the `extract_bert_features.sh` to compute the BERT embeddings for both training and development sets.
 * Finally you can start training by using `python train.py config_name`
 
 ## Training speed
