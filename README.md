@@ -1,6 +1,7 @@
-# A Cluster Ranking Model for Full Anaphora Resolution
 ## Introduction
 This repository contains code introduced in the following paper:
+
+An new version of the system which has a better performance can be find [here](https://github.com/juntaoy/dali-full-anaphora)
  
 **A Crowdsourced Corpus of Multiple Judgments and Disagreement on Anaphoric Interpretation**
 Massimo Poesio, Jon Chamberlain, Silviu Paun, Juntao Yu, Alexandra Uma and Udo Kruschwitz  
@@ -12,11 +13,9 @@ In *Proceedings of the 2019 Annual Conference of the North American Chapter of t
 * After that run `setup.sh` to download the GloVe embeddings that required by the system and compile the Tensorflow custom kernels.
 
 ## To use a pre-trained model
-* Pre-trained models can be download from [this link](https://www.dropbox.com/s/bohtoj1a01qtgk2/best_models.zip?dl=0). We provide two pre-trained models:
-   * One (att_history) for CoNLL style coreference resolution that only predicts non-singleton clusters.
-   * The other (att_history_crac_sixNR) for CRAC style full anaphora resolution, the model predicts, in addition, the single mentions and the non-referring expressions. 
-   * In the folder you will also find a file called *char_vocab.english.txt* which is the vocabulary file for character-based embeddings used by our pre-trained models.
-* Put the downloaded models along with the *char_vocab.english.txt* in the root folder of the code.
+* Pre-trained models can be download from [this link](https://www.dropbox.com/s/bohtoj1a01qtgk2/best_models.zip?dl=0). We provide our pre-trained model (naacl_2019_pd) reported in our paper:
+   * In the folder you will also find a file called *char_vocab.english_pd2.0.txt* which is the vocabulary file for character-based embeddings used by our pre-trained models.
+* Put the downloaded models along with the *char_vocab.english_pd2.0.txt* in the root folder of the code.
 * Modifiy the *test_path* and *conll_test_path* accordingly:
    * the *test_path* is the path to *.jsonlines* file, each line of the *.jsonlines* file must in the following format:
    
