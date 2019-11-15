@@ -1,8 +1,9 @@
 ## Introduction
+
+A new version of the system which has a better performance can be find [here](https://github.com/juntaoy/dali-full-anaphora)
+
 This repository contains code introduced in the following paper:
 
-An new version of the system which has a better performance can be find [here](https://github.com/juntaoy/dali-full-anaphora)
- 
 **A Crowdsourced Corpus of Multiple Judgments and Disagreement on Anaphoric Interpretation**
 Massimo Poesio, Jon Chamberlain, Silviu Paun, Juntao Yu, Alexandra Uma and Udo Kruschwitz  
 In *Proceedings of the 2019 Annual Conference of the North American Chapter of the Association for Computational Linguistics (NAACL)*, 2019
