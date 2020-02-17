@@ -4,7 +4,7 @@ This repository contains code introduced in the following paper:
  
 **[A Cluster Ranking Model for Full Anaphora Resolution](https://arxiv.org/abs/1911.09532)**  
 Juntao Yu, Alexandra Uma and Massimo Poesio  
-In arXiv preprint arXiv:1911.09532
+In *In Proceedings of the 12th Language Resources and Evaluation Conference (LREC)*, 2020
 
 An [early version](https://github.com/juntaoy/dali-full-anaphora/tree/naacl2019) of the code also can be used to replicate the results in the following paper:
 
