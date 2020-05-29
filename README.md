@@ -2,7 +2,7 @@
 ## Introduction
 This repository contains code introduced in the following paper:
  
-**[A Cluster Ranking Model for Full Anaphora Resolution](https://arxiv.org/abs/1911.09532)**  
+**[A Cluster Ranking Model for Full Anaphora Resolution](https://www.aclweb.org/anthology/2020.lrec-1.2/)**  
 Juntao Yu, Alexandra Uma and Massimo Poesio  
 In *Proceedings of the 12th Language Resources and Evaluation Conference (LREC)*, 2020
 
