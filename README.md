@@ -29,8 +29,8 @@ In *Proceedings of the 2019 Annual Conference of the North American Chapter of t
    
    ```
   {
-  "clusters": [[[0,0],[4,4]],[[2,3],[7,8]], For CoNLL style coreference
-  "clusters": [[[0,0,-1],[4,4,-1]],[[2,3,-1],[7,8,-1],[[13,13,1]]], For CRAC style full anaphora resolution
+  "clusters": [[[0,0],[5,5]],[[2,3],[7,8]], For CoNLL style coreference
+  "clusters": [[[0,0,-1],[5,5,-1]],[[2,3,-1],[7,8,-1],[[13,13,1]]], For CRAC style full anaphora resolution
   "doc_key": "nw",
   "sentences": [["John", "has", "a", "car", "."], ["He", "washed", "the", "car", "yesteday","."],["Really","?","it", "was", "raining","yesteday","!"]],
   "speakers": [["sp1", "sp1", "sp1", "sp1", "sp1"], ["sp1", "sp1", "sp1", "sp1", "sp1","sp1"],["sp2","sp2","sp2","sp2","sp2","sp2","sp2"]]
