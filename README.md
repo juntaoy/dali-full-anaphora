@@ -1,6 +1,11 @@
 # A Cluster Ranking Model for Full Anaphora Resolution
 ## Introduction
 This repository contains code introduced in the following paper:
+
+**[Stay Together: A System for Single and Split-antecedent Anaphora Resolution](https://arxiv.org/abs/2104.05320)**  
+Juntao Yu, Nafise Moosavi, Silviu Paun and Massimo Poesio  
+In *Proceedings of the 2021 Annual Conference of the North American Chapter of the Association for Computational Linguistics (NAACL)*, 2021  
+**(We are preparing the code for this paper and will be available very soon.)**
  
 **[A Cluster Ranking Model for Full Anaphora Resolution](https://www.aclweb.org/anthology/2020.lrec-1.2/)**  
 Juntao Yu, Alexandra Uma and Massimo Poesio  
