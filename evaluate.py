@@ -23,6 +23,4 @@ if __name__ == "__main__":
   model = cm.CorefModel(config)
   with tf.Session(config=session_config) as session:
     model.restore(session)
-    global_step = session.run(model.global_step)
-    print(global_step)
     model.evaluate(session, official_stdout=True)

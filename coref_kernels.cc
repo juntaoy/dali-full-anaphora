@@ -571,3 +571,239 @@ public:
   }
 };
 REGISTER_KERNEL_BUILDER(Name("ExtractAntecedentLabels").Device(DEVICE_CPU), ExtractAntecedentLabelsOp);
+
+REGISTER_OP("GoldScoresWithSplitAntecedents")
+.Input("mention_starts: int32")
+.Input("mention_ends: int32")
+.Input("gold_starts: int32")
+.Input("gold_ends: int32")
+.Input("gold_cluster_ids: int32")
+.Input("gold_types: int32")
+.Input("split_antecedent_cids: int32")
+.Input("split_antecedent_size: int32")
+.Input("crac_doc:bool")
+.Input("cluster_indices: int32")
+.Input("cluster_size: int32")
+.Input("n_types: int32")
+.Output("gold_labels:bool")
+.Output("gold_split_antecedent_labels:bool");
+
+class GoldScoresWithSplitAntecedentsOp : public OpKernel {
+public:
+  explicit GoldScoresWithSplitAntecedentsOp(OpKernelConstruction* context) : OpKernel(context) {}
+
+  void Compute(OpKernelContext* context) override {
+    TTypes<int32>::ConstVec mention_starts = context->input(0).vec<int32>();
+    TTypes<int32>::ConstVec mention_ends = context->input(1).vec<int32>();
+    TTypes<int32>::ConstVec gold_starts = context->input(2).vec<int32>();
+    TTypes<int32>::ConstVec gold_ends = context->input(3).vec<int32>();
+    TTypes<int32>::ConstVec gold_cluster_ids = context->input(4).vec<int32>();
+    TTypes<int32>::ConstVec gold_types = context->input(5).vec<int32>();
+    TTypes<int32>::ConstMatrix split_antecedent_cids = context->input(6).matrix<int32>();
+    TTypes<int32>::ConstVec split_antecedent_size = context->input(7).vec<int32>();
+    bool crac_doc = context->input(8).scalar<bool>()(0);
+    TTypes<int32, 3>::ConstTensor cluster_indices = context->input(9).tensor<int32, 3>();
+    TTypes<int32>::ConstMatrix cluster_size = context->input(10).matrix<int32>();
+
+    int n_types = context->input(11).scalar<int>()(0);
+    float negative_inf = std::log(0);
+
+    CHECK_EQ(mention_starts.dimension(0), mention_ends.dimension(0));
+    CHECK_EQ(gold_starts.dimension(0), gold_ends.dimension(0));
+
+    int num_mentions = mention_starts.dimension(0);
+    int num_gold = gold_starts.dimension(0);
+
+    int max_cluster = cluster_indices.dimension(1);
+    int max_split_antecedent = split_antecedent_cids.dimension(1);
+
+    Tensor* gold_labels_tensor = nullptr;
+    TensorShape gold_labels_shape({num_mentions, max_cluster + n_types});
+    OP_REQUIRES_OK(context, context->allocate_output(0, gold_labels_shape, &gold_labels_tensor));
+    TTypes<bool>::Matrix gold_labels = gold_labels_tensor->matrix<bool>();
+
+    Tensor* gold_split_antecedent_labels_tensor = nullptr;
+    TensorShape gold_split_antecedent_labels_shape({num_mentions, max_cluster + 1});
+    OP_REQUIRES_OK(context, context->allocate_output(1, gold_split_antecedent_labels_shape, &gold_split_antecedent_labels_tensor));
+    TTypes<bool>::Matrix gold_split_antecedent_labels = gold_split_antecedent_labels_tensor->matrix<bool>();
+
+    std::map<std::pair<int, int>, int> mention_indices;
+    for (int i = 0; i < num_mentions; ++i) {
+      mention_indices[std::pair<int, int>(mention_starts(i), mention_ends(i))] = i;
+    }
+
+    std::vector<int> mention_cluster_ids(num_mentions, -1);
+    std::vector<int> mention_type_ids(num_mentions,-1);
+    std::vector<std::vector<int>> mention_split_antecedent_ante_ids;
+    mention_split_antecedent_ante_ids.resize(num_mentions, std::vector<int>(max_split_antecedent,-1));
+    std::vector<int> mention_split_antecedent_size(num_mentions,0);
+
+
+    for (int i = 0; i < num_gold; ++i) {
+      auto iter = mention_indices.find(std::pair<int, int>(gold_starts(i), gold_ends(i)));
+      if (iter != mention_indices.end()) {
+        mention_cluster_ids[iter->second] = gold_cluster_ids(i);
+        mention_type_ids[iter->second] = gold_types(i);
+        mention_split_antecedent_size[iter->second] = split_antecedent_size(i);
+        for (int j=0; j<split_antecedent_size(i);++j){
+          mention_split_antecedent_ante_ids[iter->second][j] = split_antecedent_cids(i,j);
+        }
+      }
+    }
+
+    std::map<int, int> gold_cl_size;
+    std::map<int, int> cl2steps;
+    int curr_steps = 0;
+    for (int i = 0; i <num_mentions; ++i){
+      int cid = mention_cluster_ids[i];
+      if(cid >= 0){
+        if(cl2steps.find(cid)==cl2steps.end()){
+          cl2steps[cid] = curr_steps;
+          gold_cl_size[cid] = 1;
+          curr_steps++;
+        }else{
+          gold_cl_size[cid]++;
+        }
+      }
+    }
+
+    int num_of_cl = gold_cl_size.size();
+    if (num_of_cl == 0){
+      for(int i = 0; i < num_mentions; ++i){
+        gold_labels(i,0) = true;
+        for(int j=1; j < max_cluster + n_types; ++j){
+          gold_labels(i,j) = false;
+        }
+        gold_split_antecedent_labels(i,0) = true;
+        for(int j=1; j < max_cluster + 1; ++j){
+          gold_split_antecedent_labels(i,j) = false;
+        }
+      }
+    }else{
+      int max_cl_size = std::max_element(gold_cl_size.begin(),gold_cl_size.end(),
+                    [](const std::pair<int, int> &p1, const std::pair<int, int> &p2) {
+                     return p1.second < p2.second;})->second;
+
+      std::vector<int> curr_gold_cl_size(num_of_cl,0);
+      std::vector<std::vector<int>> gold_clusters;
+      gold_clusters.resize(num_of_cl, std::vector<int>(max_cl_size,0));
+
+
+      for (int i = 0; i < num_mentions; ++i) {
+        //split_antecedent
+        bool allfalse = true;
+        for(int l=0;l<max_cluster;++l){
+          bool con_gold = false;
+          for(int k=0;k<cluster_size(i,l);++k){
+            for(int j=0; j< mention_split_antecedent_size[i];++j){
+              int pcid = mention_split_antecedent_ante_ids[i][j];
+              pcid = cl2steps[pcid];
+              int gsize = curr_gold_cl_size[pcid];
+              for(int n=0;n<gsize;++n){
+                if(cluster_indices(i,l,k) == gold_clusters[pcid][n]){
+                  con_gold = true;
+                  allfalse = false;
+                  break;
+                }
+              }
+              if(con_gold){
+                break;
+              }
+            }
+            if(con_gold){
+              break;
+            }
+          }
+          if(con_gold){
+            gold_split_antecedent_labels(i,l+1) = true;
+          }else{
+            gold_split_antecedent_labels(i,l+1) = false;
+          }
+        }
+        gold_split_antecedent_labels(i,0) = allfalse;
+
+        if(allfalse){
+          gold_split_antecedent_labels(i,0) = true;
+          for(int j=1; j<max_cluster+1;++j){
+            gold_split_antecedent_labels(i,j) = false;
+          }
+        }
+
+        //Coreference
+        int cid = mention_cluster_ids[i];
+        if(cid >=0){
+          cid = cl2steps[cid];
+          int gsize = curr_gold_cl_size[cid];
+          if(gsize==0){
+            if(crac_doc){
+                gold_labels(i,0) = false;
+                for(int j=1; j< n_types-1;j++){
+                    gold_labels(i,j) = mention_type_ids[i]==j;
+                }
+                gold_labels(i,n_types-1) = mention_type_ids[i]<=0;//DN
+            }else{
+                gold_labels(i,0) = true;
+                for(int j=1;j<n_types;++j){
+                    gold_labels(i,j) = false;
+                }
+            }
+            for(int j=n_types; j < max_cluster + n_types; ++j){
+              gold_labels(i,j) = false;
+            }
+          }else{
+            bool allfalse = true;
+            for(int j=0;j<max_cluster;++j){
+              bool con_gold = false;
+              int size = cluster_size(i,j);
+              if(size > 0){
+                for(int k=0;k<size;++k){
+                  for(int n=0;n<gsize;++n){
+                    if(cluster_indices(i,j,k) == gold_clusters[cid][n]){
+                      con_gold = true;
+                      allfalse = false;
+                      break;
+                    }
+                  }
+                  if(con_gold){
+                    break;
+                  }
+                }
+                if(con_gold){
+                  gold_labels(i,j+n_types) = true;
+                }else{
+                  gold_labels(i,j+n_types) = false;
+                }
+              }else{
+                gold_labels(i,j+n_types) = false;
+              }
+            }
+            if(allfalse){
+              for(int k=0;k<n_types;++k){
+                gold_labels(i,k) = false;
+              }
+              if(crac_doc){
+                gold_labels(i,n_types-1) = true;//DN
+              }else{
+                gold_labels(i,0) = true;
+              }
+            }else{
+              for(int k=0;k<n_types;++k){
+                gold_labels(i,k) = false;
+              }
+            }
+          }
+
+          gold_clusters[cid][curr_gold_cl_size[cid]] = i;
+          curr_gold_cl_size[cid]++;
+        }else{
+          gold_labels(i,0) = true;
+          for(int j=1; j < max_cluster + n_types; ++j){
+            gold_labels(i,j) = false;
+          }
+        }
+
+      }
+    }
+  }
+};
+REGISTER_KERNEL_BUILDER(Name("GoldScoresWithSplitAntecedents").Device(DEVICE_CPU), GoldScoresWithSplitAntecedentsOp);

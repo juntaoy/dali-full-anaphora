@@ -3,14 +3,12 @@ from __future__ import division
 from __future__ import print_function
 
 import os
-import operator
 import random
 import math
 import json
 import threading
 import numpy as np
 import tensorflow as tf
-import tensorflow_hub as hub
 import h5py
 
 import util
@@ -39,6 +37,8 @@ class CorefModel(object):
     #non Mention, NRs, DN
     #(only NRs can be extended, non mention always be 0  DN must be the last one)
     self.crac_doc = self.config["crac_doc"]
+    self.with_split_antecedent = self.config["with_split_antecedent"]
+    self.train_mode = 'coref'
 
     input_props = []
     input_props.append((tf.string, [None, None])) # Tokens.
@@ -54,6 +54,9 @@ class CorefModel(object):
     input_props.append((tf.int32, [None])) # Gold ends.
     input_props.append((tf.int32, [None])) # Cluster ids.
     input_props.append((tf.int32, [None]))  # Gold types
+    input_props.append((tf.int32, [None, None]))  # Gold split antecedents cluster id.
+    input_props.append((tf.int32, [None]))  # Gold split antecedents cluster id size.
+
 
     self.queue_input_tensors = [tf.placeholder(dtype, shape) for dtype, shape in input_props]
     dtypes, shapes = zip(*input_props)
@@ -61,7 +64,8 @@ class CorefModel(object):
     self.enqueue_op = queue.enqueue(self.queue_input_tensors)
     self.input_tensors = queue.dequeue()
 
-    self.predictions, self.loss = self.get_predictions_and_loss(*self.input_tensors)
+    self.predictions, self.loss, self.split_antecedent_loss = self.get_predictions_and_loss(*self.input_tensors)
+
     self.global_step = tf.Variable(0, name="global_step", trainable=False)
     self.reset_global_step = tf.assign(self.global_step, 0)
     learning_rate = tf.train.exponential_decay(self.config["learning_rate"], self.global_step,
@@ -69,18 +73,33 @@ class CorefModel(object):
     trainable_params = tf.trainable_variables()
     gradients = tf.gradients(self.loss, trainable_params)
     gradients, _ = tf.clip_by_global_norm(gradients, self.config["max_gradient_norm"])
+
+    split_antecedent_gradients = tf.gradients(self.split_antecedent_loss, trainable_params)
+    split_antecedent_gradients, _ = tf.clip_by_global_norm(split_antecedent_gradients, self.config["max_gradient_norm"])
+
+
     optimizers = {
       "adam" : tf.train.AdamOptimizer,
       "sgd" : tf.train.GradientDescentOptimizer
     }
     optimizer = optimizers[self.config["optimizer"]](learning_rate)
     self.train_op = optimizer.apply_gradients(zip(gradients, trainable_params), global_step=self.global_step)
+    self.split_antecedent_train_op = optimizer.apply_gradients(zip(split_antecedent_gradients, trainable_params), global_step=self.global_step)
 
   def start_enqueue_thread(self, session):
-    with open(self.config["train_path"]) as f:
-      train_examples = [json.loads(jsonline) for jsonline in f.readlines()]
+    train_coref_examples = []
+    train_split_antecedent_examples = []
+    for line in open(self.config["train_path"]):
+      doc = json.loads(line)
+      train_coref_examples.append(doc)
+      if self.with_split_antecedent and len(doc['split_antecedents']) > 0:
+        train_split_antecedent_examples.append(doc)
+    print('Find {} training examples using {} for coref, {} for split antecedent.'.format(
+      len(train_coref_examples), len(train_coref_examples),
+      len(train_split_antecedent_examples)))
     def _enqueue_loop():
       while True:
+        train_examples = train_coref_examples if self.train_mode == 'coref' else train_split_antecedent_examples
         random.shuffle(train_examples)
         for example in train_examples:
           tensorized_example = self.tensorize_example(example, is_training=True)
@@ -92,7 +111,10 @@ class CorefModel(object):
 
   def restore(self, session,model_name="model.max.ckpt"):
     # Don't try to restore unused variables from the TF-Hub ELMo module.
-    vars_to_restore = [v for v in tf.global_variables() if "module/" not in v.name]
+    if self.with_split_antecedent:
+      vars_to_restore = [v for v in tf.global_variables() if "module/" not in v.name]
+    else:
+      vars_to_restore = [v for v in tf.global_variables() if "module/" not in v.name and "plural_scoring/" not in v.name]
     saver = tf.train.Saver(vars_to_restore)
     checkpoint_path = os.path.join(self.config["log_dir"], model_name)
     print("Restoring from {}".format(checkpoint_path))
@@ -125,11 +147,11 @@ class CorefModel(object):
     clusters = example["clusters"]
 
     gold_mentions = sorted(tuple(m) for m in util.flatten(clusters))
-    gold_mention_map = {m:i for i,m in enumerate(gold_mentions)}
+    gold_mention_map = {(m[0],m[1]):i for i,m in enumerate(gold_mentions)}
     cluster_ids = np.zeros(len(gold_mentions))
     for cluster_id, cluster in enumerate(clusters):
       for mention in cluster:
-        cluster_ids[gold_mention_map[tuple(mention)]] = cluster_id + 1
+        cluster_ids[gold_mention_map[(mention[0],mention[1])]] = cluster_id + 1
 
     sentences = example["sentences"]
     num_words = sum(len(s) for s in sentences)
@@ -159,23 +181,42 @@ class CorefModel(object):
     genre = self.genres[doc_key[:2]]
     gold_starts, gold_ends,gold_types = self.tensorize_mentions(gold_mentions)
 
+    if self.with_split_antecedent:
+      split_antecedent_cluster_map = {}
+      for anaphora, antecedent in example['split_antecedents']:
+        msid = cluster_ids[gold_mention_map[tuple(anaphora)]]
+        asid = cluster_ids[gold_mention_map[tuple(antecedent)]]
+        split_antecedent_cluster_map.setdefault(msid, set())
+        split_antecedent_cluster_map[msid].add(asid)
+
+      max_split_antecedent = 1 if len(example['split_antecedents']) == 0 else max([len(pset) for pset in split_antecedent_cluster_map.values()])
+      split_antecedent_cids = np.zeros([len(gold_mentions), max_split_antecedent], dtype=np.int32)
+      split_antecedent_size = np.zeros([len(gold_mentions)], dtype=np.int32)
+      for mid in range(len(gold_mentions)):
+        msid = cluster_ids[mid]
+        if msid in split_antecedent_cluster_map:
+          split_antecedent_size[mid] = len(split_antecedent_cluster_map[msid])
+          split_antecedent_cids[mid, :split_antecedent_size[mid]] = list(split_antecedent_cluster_map[msid])
+    else:
+      split_antecedent_cids = np.zeros([len(gold_mentions), 1], dtype=np.int32)
+      split_antecedent_size = np.zeros([len(gold_mentions)], dtype=np.int32)
+
     lm_emb = self.load_lm_embeddings(doc_key)
 
-    example_tensors = (tokens, context_word_emb, head_word_emb, lm_emb, char_index, text_len, speaker_ids, genre, is_training, gold_starts, gold_ends, cluster_ids,gold_types)
+    example_tensors = (tokens, context_word_emb, head_word_emb, lm_emb, char_index, text_len, speaker_ids, genre, is_training, gold_starts, gold_ends, cluster_ids,gold_types,split_antecedent_cids,split_antecedent_size)
 
     if is_training and num_words > self.config["max_training_words"]:
       return self.truncate_example(*example_tensors)
     else:
       return example_tensors
 
-  def truncate_example(self, tokens, context_word_emb, head_word_emb, lm_emb, char_index, text_len, speaker_ids, genre, is_training, gold_starts, gold_ends, cluster_ids,gold_types):
+  def truncate_example(self, tokens, context_word_emb, head_word_emb, lm_emb, char_index, text_len, speaker_ids, genre, is_training, gold_starts, gold_ends, cluster_ids,gold_types,split_antecedent_cids,split_antecedent_size):
 
     num_sentences = context_word_emb.shape[0]
     max_training_sentences = num_sentences
 
     num_words = sum(text_len)
     assert num_words > self.config["max_training_words"]
-
 
     while num_words > self.config["max_training_words"]:
       max_training_sentences -= 1
@@ -196,8 +237,10 @@ class CorefModel(object):
     gold_ends = gold_ends[gold_spans] - word_offset
     cluster_ids = cluster_ids[gold_spans]
     gold_types = gold_types[gold_spans]
+    split_antecedent_cids = split_antecedent_cids[gold_spans]
+    split_antecedent_size = split_antecedent_size[gold_spans]
 
-    return tokens, context_word_emb, head_word_emb, lm_emb, char_index, text_len, speaker_ids, genre, is_training, gold_starts, gold_ends, cluster_ids,gold_types
+    return tokens, context_word_emb, head_word_emb, lm_emb, char_index, text_len, speaker_ids, genre, is_training, gold_starts, gold_ends, cluster_ids,gold_types,split_antecedent_cids,split_antecedent_size
 
 
   def get_dropout(self, dropout_rate, is_training):
@@ -315,7 +358,7 @@ class CorefModel(object):
     return self.flatten_emb_by_sentence(text_outputs, text_len_mask)
 
 
-  def get_predictions_and_loss(self, tokens, context_word_emb, head_word_emb, lm_emb, char_index, text_len, speaker_ids, genre, is_training, gold_starts, gold_ends, gold_cluster_ids, gold_types):
+  def get_predictions_and_loss(self, tokens, context_word_emb, head_word_emb, lm_emb, char_index, text_len, speaker_ids, genre, is_training, gold_starts, gold_ends, gold_cluster_ids, gold_types,split_antecedent_cids,split_antecedent_size):
     self.dropout = self.get_dropout(self.config["dropout_rate"], is_training)
     self.lexical_dropout = self.get_dropout(self.config["lexical_dropout_rate"], is_training)
     self.lstm_dropout = self.get_dropout(self.config["lstm_dropout_rate"], is_training)
@@ -417,34 +460,44 @@ class CorefModel(object):
         top_span_att_scores = tf.squeeze(top_span_att_scores, axis=1)#[num_mention]
 
     if self.config["train_on_oracle_cluster"]:
-      cluster_scores, cluster_indices,individual_cluster_size,predicted_antecedents, predicted_mention_types = \
+      cluster_scores, split_antecedent_scores, cluster_indices,individual_cluster_size = \
         self.get_oracle_cluster_scores(top_span_starts, top_span_ends, top_span_cluster_ids, top_span_emb,
                                      top_span_mention_scores, top_span_att_scores, top_span_speaker_ids,
                                      genre_emb, mention_type_scores,is_training)
+      _, eval_split_antecedent_scores, eval_cluster_indices, eval_individual_cluster_size, predicted_antecedents, predicted_mention_types = \
+        self.get_cluster_scores(top_span_emb, top_span_mention_scores, top_span_att_scores, top_span_speaker_ids,
+                                genre_emb, mention_type_scores, is_training)
     else:
-      cluster_scores, cluster_indices, individual_cluster_size, predicted_antecedents, predicted_mention_types = \
+      cluster_scores,split_antecedent_scores, cluster_indices, individual_cluster_size, predicted_antecedents, predicted_mention_types = \
         self.get_cluster_scores(top_span_emb, top_span_mention_scores, top_span_att_scores, top_span_speaker_ids,
                               genre_emb, mention_type_scores,is_training)
+      eval_split_antecedent_scores, eval_cluster_indices, eval_individual_cluster_size = split_antecedent_scores, cluster_indices, individual_cluster_size
 
 
-    gold_labels = coref_ops.gold_scores(
+    gold_labels, gold_split_antecedent_labels = coref_ops.gold_scores_with_split_antecedents(
       mention_starts=top_span_starts,
       mention_ends=top_span_ends,
-      mention_type_scores=mention_type_scores,
       gold_starts=gold_starts,
       gold_ends=gold_ends,
       gold_cluster_ids=gold_cluster_ids,
       gold_types=gold_types,
+      split_antecedent_cids=split_antecedent_cids,
+      split_antecedent_size=split_antecedent_size,
       crac_doc = self.crac_doc,
       cluster_indices=cluster_indices,
       cluster_size=individual_cluster_size,
       n_types=self.n_types
     )
     gold_labels.set_shape([None, None])
+    gold_split_antecedent_labels.set_shape([None,None])
 
     loss = tf.reduce_sum(self.softmax_loss(cluster_scores, gold_labels))
 
-    return [top_span_starts, top_span_ends, predicted_antecedents,predicted_mention_types], loss
+    loss_weight_alpha = self.config['adjustment_parameter_alpha']
+    loss_weights = tf.where(gold_split_antecedent_labels[:, 0], tf.ones([k]) * loss_weight_alpha, tf.ones([k]))
+    split_antecedent_loss = tf.reduce_sum(self.softmax_loss(split_antecedent_scores, gold_split_antecedent_labels) * loss_weights)
+
+    return [top_span_starts, top_span_ends, predicted_antecedents,predicted_mention_types,eval_split_antecedent_scores, eval_cluster_indices, eval_individual_cluster_size], loss, split_antecedent_loss
 
 
   def get_oracle_cluster_scores(self, mention_starts,mention_ends,mention_cluster_ids, mention_emb, mention_scores,mention_att_scores, mention_speaker_ids, genre_emb,mention_type_scores,is_training):
@@ -552,15 +605,22 @@ class CorefModel(object):
                                    self.dropout)  # [k,max_ant, 1]
         cluster_scores = tf.squeeze(cluster_scores, 2)  # [k,max_ant]
 
+      pair_emb_stop_gradient = tf.stop_gradient(pair_emb)
+      with tf.variable_scope("plural_scoring", reuse=tf.AUTO_REUSE):
+        split_antecedent_scores = util.ffnn(pair_emb_stop_gradient, self.config["ffnn_depth"],
+                                            self.config["ffnn_size"], 1,
+                                            self.dropout)  # [k, max_ant, 1]
+        split_antecedent_scores = tf.squeeze(split_antecedent_scores, 2)  # [k, max_ant]
+
     cluster_scores += top_fast_cluster_scores
     cluster_scores = tf.concat([mention_type_scores, cluster_scores], axis=1)  # [k, max_ant+n_types]
 
+    top_fast_cluster_scores_stop_gradient = tf.stop_gradient(top_fast_cluster_scores)
+    split_antecedent_scores += top_fast_cluster_scores_stop_gradient
+    split_antecedent_scores = tf.concat([tf.zeros([num_mentions, 1]), split_antecedent_scores], axis=1)  # [k, max_ant+1]
 
-    _,_,_,predicted_antecedents, predicted_mention_types = \
-      self.get_cluster_scores(mention_emb, mention_scores, mention_att_scores, mention_speaker_ids, genre_emb,
-                              mention_type_scores,is_training)
 
-    return cluster_scores, top_cluster_indices, top_individual_cluster_size, predicted_antecedents, predicted_mention_types
+    return cluster_scores, split_antecedent_scores, top_cluster_indices, top_individual_cluster_size
 
 
 
@@ -584,6 +644,7 @@ class CorefModel(object):
     init_cluster_last_mention = tf.zeros([max_scan_clusters], dtype=tf.int32)
     init_cluster_len = tf.constant(0, dtype=tf.int32)
     init_cluster_scores = tf.zeros([max_scan_clusters + self.n_types])
+    init_split_antecedent_scores = tf.zeros([max_scan_clusters + 1])
     init_cluster_indices = tf.zeros([max_scan_clusters, max_mention_per_cluster], dtype=tf.int32)
     init_cluster_emb = tf.zeros([max_scan_clusters, mention_emb_size])
     init_cluster_mention_scores = tf.zeros([max_scan_clusters])
@@ -594,7 +655,7 @@ class CorefModel(object):
       dim_m_emb, dim_m_init_sid, dim_m_score= \
         tf.expand_dims(m_emb, 0), tf.expand_dims(m_init_sid, 0) \
           , tf.expand_dims(m_score, 0)
-      cl_emb,cl_m_score, cl_indices, cl_size, cl_sid, cl_last_m, cl_len, _, _, _, _, _ = pre
+      cl_emb,cl_m_score, cl_indices, cl_size, cl_sid, cl_last_m, cl_len, _, _, _, _, _,_ = pre
 
 
       fast_cluster_scores = dim_m_score + cl_m_score +tf.log(
@@ -668,12 +729,25 @@ class CorefModel(object):
                                      self.dropout)  # [max_ant, 1]
           cluster_scores = tf.squeeze(cluster_scores, 1)  # [max_ant]
 
+        pair_emb_stop_gradient = tf.stop_gradient(pair_emb)
+        with tf.variable_scope("plural_scoring", reuse=tf.AUTO_REUSE):
+          split_antecedent_scores = util.ffnn(pair_emb_stop_gradient, self.config["ffnn_depth"],
+                                              self.config["ffnn_size"], 1,
+                                              self.dropout)  # [max_ant, 1]
+          split_antecedent_scores = tf.squeeze(split_antecedent_scores, 1)  # [max_ant]
+
       cluster_scores += top_fast_cluster_scores
       cluster_scores = tf.concat([m_type_score, cluster_scores], axis=0)  # [max_ant+n_types]
       weighted_cluster_scores = tf.nn.softmax(cluster_scores, axis=0)  # [max_ant +n_types]
 
       step = tf.argmax(cluster_scores, output_type=tf.int32)
       step_weight = tf.gather(weighted_cluster_scores,step)
+
+
+
+      top_fast_cluster_scores_stop_gradient = tf.stop_gradient(top_fast_cluster_scores)
+      split_antecedent_scores += top_fast_cluster_scores_stop_gradient
+      split_antecedent_scores = tf.concat([[0], split_antecedent_scores],axis=0)  # [max_ant+1]
 
       def _exclude():
         return cl_emb,cl_m_score,cl_indices,cl_size,cl_sid,cl_last_m, cl_len,-1,step
@@ -752,23 +826,24 @@ class CorefModel(object):
       re_ant.set_shape([])
       re_m_type.set_shape([])
       cluster_scores.set_shape([None])
-      return re_cl_emb, re_cl_m_score, re_cl_indices, re_cl_size, re_cl_sid, re_cl_last_m, re_cl_len, re_ant, re_m_type, cluster_scores, top_cl_indices, top_cl_size
+      split_antecedent_scores.set_shape([None])
+      return re_cl_emb, re_cl_m_score, re_cl_indices, re_cl_size, re_cl_sid, re_cl_last_m, re_cl_len, re_ant, re_m_type, cluster_scores,split_antecedent_scores, top_cl_indices, top_cl_size
 
-    _, _, _,_, _, _, _,  predicted_antecedents, predicted_mention_types, cluster_scores, cluster_indices, individual_cluster_size = tf.scan(
+    _, _, _,_, _, _, _,  predicted_antecedents, predicted_mention_types, cluster_scores, split_antecedent_scores, cluster_indices, individual_cluster_size = tf.scan(
         _cluster_scan,
       (mention_emb, init_mention_sid, mention_scores, mention_type_scores),
       initializer=(
         init_cluster_emb,init_cluster_mention_scores,
         init_cluster_indices, init_cluster_size,
         init_cluster_sid, init_cluster_last_mention,
-        init_cluster_len, 0,0, init_cluster_scores,
+        init_cluster_len, 0,0, init_cluster_scores, init_split_antecedent_scores,
         init_cluster_indices, init_cluster_size
       ),swap_memory=True)
-    cluster_indices, individual_cluster_size, predicted_antecedents,predicted_mention_types, cluster_scores = \
+    cluster_indices, individual_cluster_size, predicted_antecedents,predicted_mention_types, cluster_scores,split_antecedent_scores = \
       tf.stack(cluster_indices), tf.stack(individual_cluster_size), \
-      tf.stack(predicted_antecedents), tf.stack(predicted_mention_types), tf.stack(cluster_scores)
+      tf.stack(predicted_antecedents), tf.stack(predicted_mention_types), tf.stack(cluster_scores), tf.stack(split_antecedent_scores)
 
-    return cluster_scores, cluster_indices, individual_cluster_size, predicted_antecedents, predicted_mention_types
+    return cluster_scores,split_antecedent_scores, cluster_indices, individual_cluster_size, predicted_antecedents, predicted_mention_types
 
 
 
@@ -809,6 +884,8 @@ class CorefModel(object):
       predicted_mention_cluster_types.append((mention[0], mention[1], predicted_cluster, 'old'))
 
     curr_sid = len(predicted_clusters)
+    predicted_clusters_with_singleton = [[(s,e) for s,e in cl] for cl in predicted_clusters]
+
 
     for s, e, type in zip(mention_starts, mention_ends, predicted_mention_types):
       mention = (int(s), int(e))
@@ -820,11 +897,13 @@ class CorefModel(object):
       predicted_cluster = curr_sid
       curr_sid += 1
       predicted_mention_cluster_types.append((mention[0], mention[1], predicted_cluster, label))
+      predicted_clusters_with_singleton.append([mention])
+
 
     predicted_clusters = [tuple(pc) for pc in predicted_clusters]
     mention_to_predicted = {m: predicted_clusters[i] for m, i in mention_to_predicted.items()}
 
-    return predicted_clusters, mention_to_predicted, predicted_mention_cluster_types
+    return predicted_clusters, mention_to_predicted, predicted_mention_cluster_types, predicted_clusters_with_singleton
 
   def get_predicted_clusters(self, top_span_starts, top_span_ends, predicted_antecedents):
     mention_to_predicted = {}
@@ -852,7 +931,7 @@ class CorefModel(object):
 
   def evaluate_coref(self, top_span_starts, top_span_ends, predicted_antecedents, predicted_mention_types, gold_clusters, evaluator):
     if self.crac_doc:
-      gold_clusters = [tuple(tuple((s,e)) for (s,e,t,_) in gc) for gc in gold_clusters if len(gc) >1] #exclude non-referring and singleton
+      gold_clusters = [tuple(tuple((m[0],m[1])) for m in gc) for gc in gold_clusters if len(gc) >1] #exclude non-referring and singleton
     else:
       gold_clusters = [tuple(tuple(m) for m in gc) for gc in gold_clusters]
     mention_to_gold = {}
@@ -861,16 +940,50 @@ class CorefModel(object):
         mention_to_gold[mention] = gc
 
     if self.crac_doc:
-      predicted_clusters, mention_to_predicted, predicted_mention_cluster_types = self.get_predicted_clusters_with_nr_singleton(
+      predicted_clusters, mention_to_predicted, predicted_mention_cluster_types,predicted_clusters_with_singleton = self.get_predicted_clusters_with_nr_singleton(
         top_span_starts, top_span_ends, predicted_antecedents, predicted_mention_types)
       evaluator.update(predicted_clusters, gold_clusters, mention_to_predicted, mention_to_gold)
-      return predicted_mention_cluster_types
+      return predicted_mention_cluster_types, predicted_clusters_with_singleton
     else:
       predicted_clusters, mention_to_predicted = self.get_predicted_clusters(top_span_starts, top_span_ends,
                                                                              predicted_antecedents)
       evaluator.update(predicted_clusters, gold_clusters, mention_to_predicted, mention_to_gold)
       return predicted_clusters
 
+  def get_split_antecedent_pairs(self, split_antecedent_scores, antecedents_cluster_ids, antecedents_ids, dn_mentions, span_starts, span_ends):
+    split_antecedent_lenient = []
+    split_antecedent_maps = {}
+    argmax_split_antecedent_indices = np.argmax(split_antecedent_scores, axis=1) - 1
+    for mid in dn_mentions:
+      if argmax_split_antecedent_indices[mid] >= 0:
+        score_list = []
+        ant_cid_list = set()
+        ant_list = []
+        for i, (ant_cid, ant) in enumerate(zip(antecedents_cluster_ids[mid], antecedents_ids[mid])):
+          if ant_cid == 0: #skip not aligned clusters
+            continue
+          score_list.append((split_antecedent_scores[mid, i + 1].item(), ant_cid, ant))
+        score_list = sorted(score_list, reverse=True)
+        if not score_list:
+          continue
+        for s, ant_cid, ant in score_list:
+          if len(ant_cid_list) >= 5:
+            break
+          elif s > 0:
+            if not ant_cid in ant_cid_list:
+              ant_cid_list.add(ant_cid)
+              ant_list.append(ant)
+          elif len(ant_cid_list) < 2:
+            if not ant_cid in ant_cid_list:
+              ant_cid_list.add(ant_cid)
+              ant_list.append(ant)
+        split_antecedent_maps[mid] = ant_cid_list
+        for cid in ant_cid_list:
+          split_antecedent_lenient.append((int(span_starts[mid]), int(span_ends[mid]), cid))
+    split_antecedent_lenient = set(split_antecedent_lenient)
+    split_antecedent_em = set(tuple([int(span_starts[mid]), int(span_ends[mid])] + sorted(list(split_antecedent_maps[mid]))) for mid in split_antecedent_maps)
+    split_antecedent_anaphora = set((m[0], m[1]) for m in split_antecedent_lenient)
+    return split_antecedent_lenient, split_antecedent_em,split_antecedent_anaphora
 
   def load_eval_data(self):
     if self.eval_data is None:
@@ -882,7 +995,7 @@ class CorefModel(object):
       num_words = sum(tensorized_example[2].sum() for tensorized_example, _ in self.eval_data)
       print("Loaded {} eval examples.".format(len(self.eval_data)))
 
-  def evaluate(self, session, official_eval=False, official_stdout=False):
+  def evaluate(self, session, official_eval=False, official_stdout=False, mode="all"):
     if official_stdout or self.crac_doc:  # for crac the official_eval is compulsory
       official_eval = True
     self.load_eval_data()
@@ -890,12 +1003,83 @@ class CorefModel(object):
     coref_predictions = {}
     coref_evaluator = metrics.CorefEvaluator()
 
-    for example_num, (tensorized_example, example) in enumerate(self.eval_data):
-      _, _, _, _, _, _, _, _, _, gold_starts, gold_ends, _, _ = tensorized_example
-      feed_dict = {i:t for i,t in zip(self.input_tensors, tensorized_example)}
-      top_span_starts, top_span_ends, predicted_antecedents, predicted_mention_types = session.run(self.predictions, feed_dict=feed_dict)
+    split_antecedent_metrices_names = ["Split Antecedent Lenient", "Split Antecedent Exact Match", "Split Antecedent Anaphora Detection"]
+    tp, fp, fn = [0] * 3, [0] * 3, [0] * 3
 
-      coref_predictions[example["doc_key"]] = self.evaluate_coref(top_span_starts, top_span_ends, predicted_antecedents, predicted_mention_types, example["clusters"], coref_evaluator)
+    for example_num, (tensorized_example, example) in enumerate(self.eval_data):
+      _, _, _, _, _, _, _, _, _, gold_starts, gold_ends, _, _, _,_ = tensorized_example
+      feed_dict = {i:t for i,t in zip(self.input_tensors, tensorized_example)}
+      top_span_starts, top_span_ends, predicted_antecedents, predicted_mention_types,split_antecedent_scores,cluster_indices,individual_cluster_size = session.run(self.predictions, feed_dict=feed_dict)
+
+
+      if self.crac_doc:
+        coref_predictions[example["doc_key"]],predicted_clusters_with_singleton = self.evaluate_coref(top_span_starts, top_span_ends,
+                                                                    predicted_antecedents, predicted_mention_types,
+                                                                    example["clusters"], coref_evaluator)
+
+        # split-antecedent
+        if self.with_split_antecedent:
+          gold_clusters_with_singleton = [[(m[0], m[1]) for m in cl] for cl in example['clusters']]
+
+          A, B, C = cluster_indices.shape
+
+          top_span_cluster_ids = []
+          pm2gcid = util.mention2GoldClusterIds_ceafe(predicted_clusters_with_singleton, gold_clusters_with_singleton)
+          for i in xrange(A):
+            m = (int(top_span_starts[i]), int(top_span_ends[i]))
+            top_span_cluster_ids.append(pm2gcid.get(m, 0))
+
+          antecedents_cluster_ids = []
+          antecedents_ids = []
+          for a in range(A):
+            antecedents_cluster_ids.append([])
+            antecedents_ids.append([])
+            for b in range(B):
+              if int(individual_cluster_size[a, b]) > 0:
+                antecedents_cluster_ids[-1].append(
+                  top_span_cluster_ids[int(cluster_indices[a, b, int(individual_cluster_size[a, b]) - 1])])
+                antecedents_ids[-1].append(int(cluster_indices[a, b, int(individual_cluster_size[a, b]) - 1]))
+          pred_mention_to_id = {}
+          for i in range(A):
+            pred_mention_to_id[(int(top_span_starts[i]), int(top_span_ends[i]))] = i
+          dn_mentions = [pred_mention_to_id[(s, e)] for s, e, _, t in coref_predictions[example["doc_key"]] if
+                         t == 'new']
+
+          # get split-antecedents
+          if mode != 'coref':
+            gold_split_antecedent_maps = {}
+            gold_mention_cid = {(m[0], m[1]): cid + 1 for cid, cl in enumerate(example['clusters']) for m in cl}
+            gold_split_antecedent_lenient = set(
+              (ana[0], ana[1], gold_mention_cid[tuple(ant)]) for ana, ant in example['split_antecedents'])
+            gold_split_antecedent_anaphora = set(tuple(ana) for ana, ant in example['split_antecedents'])
+
+            for ana, ant in example["split_antecedents"]:
+              ana = tuple(ana)
+              ant = tuple(ant)
+              gold_split_antecedent_maps.setdefault(ana, set())
+              gold_split_antecedent_maps[ana].add(gold_mention_cid[ant])
+            gold_split_antecedent_em = set(
+              tuple(list(ana) + sorted(list(gold_split_antecedent_maps[ana]))) for ana in gold_split_antecedent_maps)
+
+            pred_split_antecedent_lenient, pred_split_antecedent_em, pred_split_antecedent_anaphora = self.get_split_antecedent_pairs(
+              split_antecedent_scores, antecedents_cluster_ids, antecedents_ids, dn_mentions, top_span_starts,
+              top_span_ends)
+
+            tp[0] += len(gold_split_antecedent_lenient & pred_split_antecedent_lenient)
+            fn[0] += len(gold_split_antecedent_lenient - pred_split_antecedent_lenient)
+            fp[0] += len(pred_split_antecedent_lenient - gold_split_antecedent_lenient)
+
+            tp[1] += len(gold_split_antecedent_em & pred_split_antecedent_em)
+            fn[1] += len(gold_split_antecedent_em - pred_split_antecedent_em)
+            fp[1] += len(pred_split_antecedent_em - gold_split_antecedent_em)
+
+            tp[2] += len(gold_split_antecedent_anaphora & pred_split_antecedent_anaphora)
+            fn[2] += len(gold_split_antecedent_anaphora - pred_split_antecedent_anaphora)
+            fp[2] += len(pred_split_antecedent_anaphora - gold_split_antecedent_anaphora)
+
+
+      else:
+        coref_predictions[example["doc_key"]] = self.evaluate_coref(top_span_starts, top_span_ends, predicted_antecedents, predicted_mention_types, example["clusters"], coref_evaluator)
       if example_num % 10 == 0:
         print("Evaluated {}/{} examples.".format(example_num + 1, len(self.eval_data)))
 
@@ -905,23 +1089,36 @@ class CorefModel(object):
     if official_eval:
       if self.crac_doc:
         predicted_path = self.config["out_dir"]
-        average_f1, average_conll_f1, average_nr_f1 = crac.eval_crac(self.config["conll_eval_path"], coref_predictions,
+        aggregate_f1, average_conll_f1, average_nr_f1 = crac.eval_crac(self.config["conll_eval_path"], coref_predictions,
                                                                      predicted_path, official_stdout)
-        summary_dict["Average F1 (85%conll+15%nr)"] = average_f1
+        summary_dict["Average F1 (85%conll+15%nr)"] = aggregate_f1
         summary_dict["Average F1 (conll)"] = average_conll_f1
         summary_dict["Average F1 (nr)"] = average_nr_f1
-        print ("Average F1 (85%conll+15%nr): {:.2f}%".format(average_f1))
+        print ("Average F1 (85%conll+15%nr): {:.2f}%".format(aggregate_f1))
         print ("Average F1 (conll): {:.2f}%".format(average_conll_f1))
         print ("Average F1 (nr): {:.2f}%".format(average_nr_f1))
+
+        if self.with_split_antecedent and mode != 'coref':
+          for i in xrange(3):
+            r = 0.0 if tp[i] == 0 else float(tp[i]) / (tp[i] + fn[i])
+            p = 0.0 if tp[i] == 0 else float(tp[i]) / (tp[i] + fp[i])
+            f = 0.0 if tp[i] == 0 else 2 * r * p / (r + p)
+            print("{} F1: {:.2f}%".format(split_antecedent_metrices_names[i],f * 100))
+            print("{} precision: {:.2f}%".format(split_antecedent_metrices_names[i],p * 100))
+            print("{} recall: {:.2f}%".format(split_antecedent_metrices_names[i],r * 100))
+
+            if i == 0: #lanient score
+              aggregate_f1 = f * 100
+
       else:
         eval_file = self.config["conll_eval_path"]
         eval_file = eval_file[eval_file.rfind('/') + 1:] if '/' in eval_file else eval_file
         predicted_path = os.path.join(self.config["out_dir"], eval_file)
         conll_results = conll.evaluate_conll(self.config["conll_eval_path"], coref_predictions, predicted_path,
                                              official_stdout)
-        average_f1 = sum(results["f"] for results in conll_results.values()) / len(conll_results)
-        summary_dict["Average F1 (conll)"] = average_f1
-        print ("Average F1 (conll): {:.2f}%".format(average_f1))
+        aggregate_f1 = sum(results["f"] for results in conll_results.values()) / len(conll_results)
+        summary_dict["Average F1 (conll)"] = aggregate_f1
+        print ("Average F1 (conll): {:.2f}%".format(aggregate_f1))
 
     p, r, f = coref_evaluator.get_prf()
     summary_dict["Average F1 (py)"] = f
@@ -930,9 +1127,9 @@ class CorefModel(object):
     print ("Average precision (py): {:.2f}%".format(p * 100))
     summary_dict["Average recall (py)"] = r
     print ("Average recall (py): {:.2f}%".format(r * 100))
-    average_f1 = f * 100 if not official_eval else average_f1
+    aggregate_f1 = f * 100 if not official_eval else aggregate_f1
 
-    return util.make_summary(summary_dict), average_f1
+    return util.make_summary(summary_dict), aggregate_f1
 
 
 

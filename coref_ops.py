@@ -12,6 +12,9 @@ tf.NotDifferentiable("ExtractSpans")
 gold_scores = coref_op_library.gold_scores
 tf.NotDifferentiable("GoldScores")
 
+gold_scores_with_split_antecedents = coref_op_library.gold_scores_with_split_antecedents
+tf.NotDifferentiable("GoldScoresWithSplitAntecedents")
+
 distance_bins = coref_op_library.distance_bins
 tf.NotDifferentiable("DistanceBins")
 

@@ -14,7 +14,32 @@ import sys
 import numpy as np
 import tensorflow as tf
 import pyhocon
+from sklearn.utils.linear_assignment_ import linear_assignment
 
+def phi4(c1, c2):
+  return 2 * len([m for m in c1 if m in c2]) / float(len(c1) + len(c2))
+
+
+def mention2GoldClusterIds_ceafe(clusters, gold_clusters):
+  clusters = [c for c in clusters]
+  scores = np.zeros((len(gold_clusters), len(clusters)))
+  for i in range(len(gold_clusters)):
+    for j in range(len(clusters)):
+      scores[i, j] = phi4(gold_clusters[i], clusters[j])
+  matching = linear_assignment(-scores)
+  p2g = {m[1]:m[0] for m in matching if scores[m[0]][m[1]] > 0}
+  extra_ids = len(gold_clusters)+1
+  mention2gcid = {}
+  for pid, cl in enumerate(clusters):
+    if pid in p2g:
+      gid = p2g[pid]+1
+    else:
+      gid = extra_ids
+      extra_ids+=1
+    for m in cl:
+      mention2gcid[m] = gid
+
+  return mention2gcid
 
 def initialize_from_env():
   name = sys.argv[1]
