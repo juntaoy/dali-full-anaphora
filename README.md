@@ -14,7 +14,7 @@ In *Proceedings of the 2019 Annual Conference of the North American Chapter of t
 * After that run `setup.sh` to download the GloVe embeddings that required by the system and compile the Tensorflow custom kernels.
 
 ## To use a pre-trained model
-* Pre-trained models can be download from [this link](https://www.dropbox.com/s/awo5yrisnsy5fax/best_pd_model_naacl2019.zip?dl=0). We provide our pre-trained model (naacl_2019_pd) reported in our paper:
+* Pre-trained models can be download from [this link](https://essexuniversity.box.com/s/z2c250pcoal157bo6w940r1rvpjxx3el). We provide our pre-trained model (naacl_2019_pd) reported in our paper:
    * In the folder you will also find a file called *char_vocab.english_pd2.0.txt* which is the vocabulary file for character-based embeddings used by our pre-trained models.
 * Put the downloaded models along with the *char_vocab.english_pd2.0.txt* in the root folder of the code.
 * Modifiy the *test_path* and *conll_test_path* accordingly:
